@@ -2,21 +2,25 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from typing import Dict, List, Optional
 
 import httpx
+import requests
 import yaml
 from cozepy import COZE_CN_BASE_URL
 from cozepy import Coze, TokenAuth
-from xhs_mcp_server.server import download_image
-from xhs_mcp_server.write_xiaohongshu import XiaohongshuPoster
 
-logging.basicConfig(level=logging.DEBUG)
+from XiaohongshuPoster_new import XiaohongshuPoster
+from book_get import get_books_by_date
+
+
+# logging.basicConfig(level=logging.DEBUG)
 
 
 class XiaohongshuAutomation:
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "/Users/linear/myown/code/coze_to_xhs/src/config.yaml"):
         self.config = self._load_config(config_path)
         self.books = self.config.get("books", [])
         self.result_file = self.config.get("result_file", "agent_results.json")
@@ -27,6 +31,9 @@ class XiaohongshuAutomation:
         self.coze_api_token = self.config.get("api_key")
         self.coze_api_base = COZE_CN_BASE_URL
         self.multi_pic = self.config.get("multi_pic")
+        self.books_load = self.config.get("books_load")
+        if self.books_load:
+            self.books = get_books_by_date()
 
         if not os.path.exists(self.result_file):
             with open(self.result_file, "w", encoding="utf - 8") as f:
@@ -83,13 +90,13 @@ class XiaohongshuAutomation:
                 for image in images:
                     try:
                         if self.is_valid_image(image):
-                            local_image = download_image(image)
+                            local_image = self.download_image_self(image)
                             local_images.append(local_image)
                         else:
                             # 分割URL，去除查询参数（?之后的部分）
                             image_without_query = image.split('?')[0]
                             if self.is_valid_image(image_without_query):
-                                local_image = download_image(image_without_query)
+                                local_image = self.download_image_self(image_without_query)
                                 local_images.append(local_image)
                             else:
                                 print("continue,image is not valid image:", image)
@@ -118,6 +125,25 @@ class XiaohongshuAutomation:
         print(f"发布完成,result:{result} res:{res}")
         return result
 
+    def download_image_self(self, url: str) -> str:
+        local_filename = url.split('/')[-1]
+        temp_dir = tempfile.gettempdir()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            "Accept": "image/png,image/svg+xml,image/jxr,image/*;q=0.8",
+            "Referer": "https://www.taobao.com/",  # 添加来源页（可选，部分服务器需要）
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "zh-CN,zh;q=0.9"
+        }
+
+        local_path = os.path.join(temp_dir, local_filename)  # 假设缓存地址为/tmp
+        with requests.get(url, headers=headers, stream=True) as r:
+            r.raise_for_status()
+            with open(local_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        return local_path
+
     def is_valid_image(self, filename: str) -> bool:
         """检查文件后缀是否为允许的图片格式"""
         valid_extensions = {'png', 'jpg', 'jpeg', 'webp'}
@@ -127,12 +153,23 @@ class XiaohongshuAutomation:
     def process_books(self) -> None:
         log_file = "publish_log.txt"
         log_content = ""
+        print(f'books list: {self.books}')
         for book in self.books:
-            print(f"\n开始处理书籍: {book}")
-            log_content += f"\n处理书籍: {book}\n"
-            agent_result = self.call_agent(book)
-            if not agent_result:
-                log_content += "调用智能体失败\n"
+            if not book:
+                continue
+            retry_num = 0
+            call_agent = False
+            while retry_num < 5:
+                print(f"\n开始处理书籍: {book}")
+                log_content += f"\n处理书籍: {book}\n"
+                agent_result = self.call_agent(book)
+                if not agent_result:
+                    log_content += "调用智能体失败\n"
+                    retry_num = retry_num + 1
+                else:
+                    call_agent = True
+                    break
+            if not call_agent:
                 continue
             self.save_agent_result(book, agent_result)
             log_content += "智能体结果保存成功\n"
@@ -152,12 +189,15 @@ class XiaohongshuAutomation:
                 # 剔除标题
                 content = content.replace(title, '')
                 # 剔除 Emoji
-                content = re.sub(r'[\U0001F300-\U0001F5FF\U0001F600-\U0001F64F\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]', '', content)
+                content = re.sub(
+                    r'[\U0001F300-\U0001F5FF\U0001F600-\U0001F64F\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]', '',
+                    content)
                 # 定义要替换的文本列表
                 patterns = [
-                    r'✨|📖|📝|🤔',  # 替换 Emoji
+                    r'✨|📖|📝|🤔|🤗',  # 替换 Emoji
                     r'###|总标题[:：]?|小标题[:：]|[分]*标题[:：]?\d*[:：]?|内容[:：]',  # 替换各类标题标记
-                    r'书摘\s?[一二三四1234][:：]?|摘要[一二三四1234][:：]?|段落[一二三四1234][:：]?',  # 替换摘要标记
+                    r'书摘\s?[一二三四1234][:：]?|摘要[一二三四1234][:：]?|段落[一二三四1234][:：]?|引导评论问题[:：]?|互动问题[:：]?|#*[:：]?',
+                    # 替换摘要标记
                 ]
                 # 组合所有模式为单个正则表达式
                 pattern = re.compile('|'.join(patterns))
@@ -173,7 +213,7 @@ class XiaohongshuAutomation:
                     log_content += "智能体返回结果缺少必要字段\n"
                     continue
                 count = 0
-                while count < 10:
+                while count < 5:
                     success = self.publish_to_xiaohongshu(title, content, images)
                     if success:
                         log_content += "小红书发布成功\n"

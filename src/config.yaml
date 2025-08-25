@@ -1,8 +1,9 @@
 books:
-  - 认知觉醒：开启自我改变的原动力 周岭
-phone_number: xxxxxxxxxx
+  - 救命之方：一本书教你解决全家人常见健康问题（全新修订升级版） 罗大伦
+phone_number: 登录小红书的手机号码
 cookie_path: /Users/linear/myown/cookie
 agent_id: xxxxxxxxxx
-workflow_id: xxxxxxxxxx
-api_key:  xxxxxxxxxx
-multi_pic: false
+workflow_id: 7505245815179804691
+api_key:  扣子的api key
+multi_pic: true
+books_load: true
